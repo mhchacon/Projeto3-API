@@ -4,16 +4,40 @@ from database import db
 from passlib.context import CryptContext 
 from bson.objectid import ObjectId
 from fastapi.middleware.cors import CORSMiddleware
+import os
+from dotenv import load_dotenv
+import jwt
+from fastapi import Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+security = HTTPBearer()
 
-app = FastAPI(title="API - Home Office OS", description="Motor principal do sistema de gestão e segurança.")
+
+load_dotenv()
+
+
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("Aviso Crítico: JWT_SECRET_KEY não foi encontrada no arquivo .env!")
+
+ALGORITHM = "HS256"
+
+app = FastAPI(title="API - VERIFIQ OS", description="Motor principal do sistema de gestão e segurança.")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite que qualquer front-end acesse. (No futuro, colocamos o link real do site aqui)
+    allow_origins=["*"],  
     allow_credentials=True,
-    allow_methods=["*"],  # Permite POST, GET, PUT, DELETE
+    allow_methods=["*"],  
     allow_headers=["*"],
 )
-
+def criar_token(usuario_id: str):
+    return jwt.encode({"usuario_id": usuario_id}, SECRET_KEY, algorithm=ALGORITHM)
+def validar_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("usuario_id")
+    except:
+        raise HTTPException(status_code=401, detail="Acesso negado. Crachá (Token) inválido.")
 @app.get("/")
 def home():
     return {"status": "API online e rodando perfeitamente!"}
@@ -68,15 +92,13 @@ def login(usuario: UsuarioLogin):
     
     if not usuario_db or not verificar_senha(usuario.senha, usuario_db["senha"]):
         raise HTTPException(status_code=401, detail="E-mail ou senha incorretos.")
-    
+    id_do_usuario = str(usuario_db["_id"])
+    token_jwt = criar_token(id_do_usuario)
     
     return {
         "mensagem": "Login realizado com sucesso!",
-        "usuario": {
-            "id": str(usuario_db["_id"]),
-            "nome": usuario_db["nome"],
-            "email": usuario_db["email"]
-        }
+        "token": token_jwt,
+        "usuario": usuario_db["nome"]
     }
 class Tarefa(BaseModel):
     titulo: str
@@ -88,17 +110,18 @@ class AtualizarStatus(BaseModel):
     status: str
 
 @app.post("/tarefas")
-def criar_tarefa(tarefa: Tarefa):
+def criar_tarefa(tarefa: Tarefa, usuario_id: str = Depends(validar_token)):
     nova_tarefa = tarefa.model_dump()
+    nova_tarefa["usuario_id"] = usuario_id 
+    
     resultado = db["tarefas"].insert_one(nova_tarefa)
     return {"mensagem": "Tarefa criada!", "id": str(resultado.inserted_id)}
 
-@app.get("/tarefas/{usuario_id}")
-def listar_tarefas(usuario_id: str):
-    # 1. Busca no banco todas as tarefas que tenham este usuario_id
+@app.get("/tarefas")
+def listar_tarefas(usuario_id: str = Depends(validar_token)):
+    
     tarefas_db = list(db["tarefas"].find({"usuario_id": usuario_id}))
     
-    # 2. Formata a lista para o front-end entender 
     lista_tarefas = []
     for tarefa in tarefas_db:
         tarefa["_id"] = str(tarefa["_id"])
@@ -107,26 +130,26 @@ def listar_tarefas(usuario_id: str):
     return lista_tarefas
 
 @app.put("/tarefas/{tarefa_id}")
-def atualizar_status_tarefa(tarefa_id: str, atualizacao: AtualizarStatus):
-    # 1. Manda o MongoDB procurar a tarefa pelo ID e atualizar o campo "status"
+def atualizar_status_tarefa(tarefa_id: str, atualizacao: AtualizarStatus, usuario_id: str = Depends(validar_token)):
+    
     resultado = db["tarefas"].update_one(
-        {"_id": ObjectId(tarefa_id)}, 
+        {"_id": ObjectId(tarefa_id), "usuario_id": usuario_id}, 
         {"$set": {"status": atualizacao.status}}
     )
     
-    # 2. Verifica se a tarefa realmente existia
     if resultado.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada ou você não tem permissão para alterá-la.")
         
     return {"mensagem": f"Tarefa movida para: {atualizacao.status}"}
-
 @app.delete("/tarefas/{tarefa_id}")
-def deletar_tarefa(tarefa_id: str):
-    # Pede para o MongoDB deletar o documento com este ID
-    resultado = db["tarefas"].delete_one({"_id": ObjectId(tarefa_id)})
+def deletar_tarefa(tarefa_id: str, usuario_id: str = Depends(validar_token)):
+
+    resultado = db["tarefas"].delete_one(
+        {"_id": ObjectId(tarefa_id), "usuario_id": usuario_id}
+    )
     
-    # Se ele não deletou nada (deleted_count == 0), a tarefa não existia
+    
     if resultado.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada ou você não tem permissão para excluí-la.")
         
     return {"mensagem": "Tarefa excluída com sucesso!"}
