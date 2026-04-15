@@ -1,4 +1,3 @@
-from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from database import db 
 from passlib.context import CryptContext 
@@ -7,9 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 import jwt
-from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 security = HTTPBearer()
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from datetime import datetime, timedelta
 
 
 load_dotenv()
@@ -69,6 +69,9 @@ def cadastrar_usuario(usuario: UsuarioCadastro):
         "mensagem": "Usuário cadastrado com sucesso!",
         "id_usuario": str(resultado.inserted_id)
     }
+
+class StatusCamera(BaseModel):
+    status: str  
 
 class UsuarioLogin(BaseModel):
     email: str
@@ -153,3 +156,65 @@ def deletar_tarefa(tarefa_id: str, usuario_id: str = Depends(validar_token)):
         raise HTTPException(status_code=404, detail="Tarefa não encontrada ou você não tem permissão para excluí-la.")
         
     return {"mensagem": "Tarefa excluída com sucesso!"}
+
+class GerenciadorDeConexoes:
+    def __init__(self):
+        
+        self.conexoes_ativas: list[WebSocket] = []
+
+    async def conectar(self, websocket: WebSocket):
+        await websocket.accept()
+        self.conexoes_ativas.append(websocket)
+
+    def desconectar(self, websocket: WebSocket):
+        self.conexoes_ativas.remove(websocket)
+
+    async def enviar_mensagem_todos(self, mensagem: str):
+        
+        for conexao in self.conexoes_ativas:
+            await conexao.send_text(mensagem)
+
+gerenciador_chat = GerenciadorDeConexoes()
+
+@app.websocket("/ws/chat/{nome_usuario}")
+async def websocket_chat(websocket: WebSocket, nome_usuario: str):
+    
+    await gerenciador_chat.conectar(websocket)
+    
+    try:
+        
+        await gerenciador_chat.enviar_mensagem_todos(f" {nome_usuario} entrou no chat!")
+        
+        
+        while True:
+           
+            mensagem_recebida = await websocket.receive_text()
+            
+            mensagem_formatada = f" {nome_usuario}: {mensagem_recebida}"
+            await gerenciador_chat.enviar_mensagem_todos(mensagem_formatada)
+            
+    except WebSocketDisconnect:
+        
+        gerenciador_chat.desconectar(websocket)
+        await gerenciador_chat.enviar_mensagem_todos(f" {nome_usuario} saiu do chat.")
+
+@app.post("/cameras/status")
+
+async def registrar_status_camera(status: StatusCamera, usuario_id: str = Depends(validar_token)):
+    
+    resultado = db["status_cameras"].insert_one({
+        "usuario_id": usuario_id,
+        "status": status.status,
+        "timestamp": datetime.utcnow()
+    })
+    
+    db["logs_camera"].insert_one(log_db)
+
+    if req.status == "LIGADA":
+        mensagem_alerta = f"[sistema] Alerta: A câmera foi LIGADA pelo usuário {usuario_id[-4:]}! e a varredura de segurança foi iniciada."
+    else:
+        mensagem_alerta = f"[sistema] Alerta: A câmera foi DESLIGADA pelo usuário {usuario_id[-4:]}! e a varredura de segurança foi interrompida."
+    await gerenciador_chat.enviar_mensagem_todos(mensagem_alerta)
+
+    return {
+        "mensagem": "Status da câmera registrado com sucesso e usuário notificado no chat!"}
