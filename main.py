@@ -112,6 +112,23 @@ class Tarefa(BaseModel):
 class AtualizarStatus(BaseModel):
     status: str
 
+class EditarTextoTarefa(BaseModel):
+    titulo: str
+    descricao: str
+
+class LoginMaquina(BaseModel):
+    machine_id: str
+
+@app.post("/login-maquina")
+def login_maquina(dados: LoginMaquina):
+    maquina_db = db["maquinas_autorizadas"].find_one({"machine_id": dados.machine_id})
+    if not maquina_db:
+        raise HTTPException(status_code=401, detail="Acesso negado: Máquina não autorizada.")
+    token_jwt = criar_token(maquina_db["usuario_id"])
+    return {"mensagem" : "Autenticação bem-sucedida!",
+        "token": token_jwt,
+        "usuario": maquina_db["nome_usuario"]}
+
 @app.post("/tarefas")
 def criar_tarefa(tarefa: Tarefa, usuario_id: str = Depends(validar_token)):
     nova_tarefa = tarefa.model_dump()
@@ -144,6 +161,19 @@ def atualizar_status_tarefa(tarefa_id: str, atualizacao: AtualizarStatus, usuari
         raise HTTPException(status_code=404, detail="Tarefa não encontrada ou você não tem permissão para alterá-la.")
         
     return {"mensagem": f"Tarefa movida para: {atualizacao.status}"}
+
+@app.put("/tarefas/editar-texto/{tarefa_id}")
+def editar_texto(tarefa_id: str, dados: EditarTextoTarefa, usuario_id: str = Depends(validar_token)):
+    resultado = db["tarefas"].update_one(
+        {"_id": ObjectId(tarefa_id), "usuario_id": usuario_id},
+        {"$set": {"titulo": dados.titulo, "descricao": dados.descricao}}
+    )
+    
+    if resultado.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada ou sem permissão para editá-la.")
+        
+    return {"mensagem": "Texto da tarefa atualizado com sucesso!"}
+
 @app.delete("/tarefas/{tarefa_id}")
 def deletar_tarefa(tarefa_id: str, usuario_id: str = Depends(validar_token)):
 
@@ -156,6 +186,10 @@ def deletar_tarefa(tarefa_id: str, usuario_id: str = Depends(validar_token)):
         raise HTTPException(status_code=404, detail="Tarefa não encontrada ou você não tem permissão para excluí-la.")
         
     return {"mensagem": "Tarefa excluída com sucesso!"}
+
+class EditarTextoTarefa(BaseModel):
+    titulo: str
+    descricao: str
 
 class GerenciadorDeConexoes:
     def __init__(self):
