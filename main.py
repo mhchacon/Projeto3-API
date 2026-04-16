@@ -119,6 +119,11 @@ class EditarTextoTarefa(BaseModel):
 class LoginMaquina(BaseModel):
     machine_id: str
 
+class MaquinaNova(BaseModel):
+    machine_id: str
+    usuario_id_dono: str 
+    nome_maquina: str
+
 @app.post("/login-maquina")
 def login_maquina(dados: LoginMaquina):
     maquina_db = db["maquinas_autorizadas"].find_one({"machine_id": dados.machine_id})
@@ -128,6 +133,25 @@ def login_maquina(dados: LoginMaquina):
     return {"mensagem" : "Autenticação bem-sucedida!",
         "token": token_jwt,
         "usuario": maquina_db["nome_usuario"]}
+
+@app.post("/maquinas")
+def cadastrar_maquina_autorizada(maquina: MaquinaNova, admin_id: str = Depends(validar_admin)):
+    
+    maquina_existente = db["maquinas_autorizadas"].find_one({"machine_id": maquina.machine_id})
+    if maquina_existente:
+        raise HTTPException(status_code=400, detail="Esta máquina já está autorizada no sistema.")
+    
+   
+    nova_maquina_db = {
+        "machine_id": maquina.machine_id,
+        "usuario_id": maquina.usuario_id_dono,
+        "nome_maquina": maquina.nome_maquina,
+        "cadastrado_por": admin_id 
+    }
+    
+    db["maquinas_autorizadas"].insert_one(nova_maquina_db)
+    
+    return {"mensagem": "Hardware autorizado com sucesso e vinculado ao funcionário!"}
 
 @app.post("/tarefas")
 def criar_tarefa(tarefa: Tarefa, usuario_id: str = Depends(validar_token)):
@@ -252,3 +276,9 @@ async def registrar_status_camera(status: StatusCamera, usuario_id: str = Depend
 
     return {
         "mensagem": "Status da câmera registrado com sucesso e usuário notificado no chat!"}
+
+def validar_admin(usuario_id: str = Depends(validar_token)):
+    usuario_db = db["usuarios"].find_one({"_id": ObjectId(usuario_id)})
+    if not usuario_db or usuario_db.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Acesso negado: Requer privilégios de administrador.")
+    return usuario_id
