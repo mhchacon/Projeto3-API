@@ -2,6 +2,7 @@ import os
 import uuid
 from datetime import datetime, timedelta
 import asyncio
+from pathlib import Path
 from typing import Any, List, Optional
 
 import jwt
@@ -9,6 +10,7 @@ from bson.objectid import ObjectId
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from database import db
@@ -25,6 +27,13 @@ TOKEN_EXPIRACAO_MINUTOS = 60 * 8
 DEVICE_TOKEN_EXPIRACAO_MINUTOS = 60 * 8
 DEVICE_HEARTBEAT_TIMEOUT_SECONDS = 75
 ROLES_VALIDOS = {"admin", "funcionario"}
+DESKTOP_EXE_PATH = Path(
+    os.getenv(
+        "DESKTOP_EXE_PATH",
+        Path(__file__).resolve().parent / "downloads" / "VERIFIQ.exe",
+    )
+)
+DESKTOP_EXE_URL = os.getenv("DESKTOP_EXE_URL", "").strip()
 security = HTTPBearer()
 security_opcional = HTTPBearer(auto_error=False)
 
@@ -775,6 +784,24 @@ def confirmar_comando_dispositivo(
 def status_dispositivo_web(usuario_id: str = Depends(validar_token)):
     dispositivo = buscar_dispositivo_do_usuario(usuario_id)
     return _serializar_dispositivo(dispositivo)
+
+
+@app.get("/desktop/download")
+def download_agente_desktop(usuario_id: str = Depends(validar_token)):
+    if DESKTOP_EXE_URL:
+        return RedirectResponse(DESKTOP_EXE_URL)
+
+    if not DESKTOP_EXE_PATH.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Instalador do agente desktop não está disponível no servidor.",
+        )
+
+    return FileResponse(
+        DESKTOP_EXE_PATH,
+        media_type="application/octet-stream",
+        filename="VERIFIQ.exe",
+    )
 
 
 @app.get("/empresa/funcionarios")
